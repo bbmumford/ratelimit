@@ -109,7 +109,7 @@ func (rl *RateLimiter) Register(name string, config *RateLimitConfig) {
 
 // Protect reports whether a request under the named config is allowed, plus the remaining
 // tokens and the reset duration. An unregistered name fails OPEN (allow) — registration is the
-// consumer's explicit act; this mirrors the source behaviour.
+// consumer's explicit act, so an unconfigured limit does not block traffic.
 func (rl *RateLimiter) Protect(name string, ctx *RateLimitContext) (allowed bool, remaining int, reset time.Duration, err error) {
 	rl.mu.RLock()
 	config, ok := rl.configs[name]

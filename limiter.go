@@ -107,6 +107,44 @@ func (rl *RateLimiter) Register(name string, config *RateLimitConfig) {
 	rl.configs[name] = config
 }
 
+// Registered reports whether a config is registered under name.
+//
+// It exists because Protect fails OPEN on an unregistered name and says so only by
+// allowing the request: it returns a nil error either way, so a caller cannot tell a
+// request that passed a limit from one that met no limit at all. A name that is
+// mounted but never registered — a typo, a registration dropped while moving a
+// consumer off a shared package-level limiter — therefore serves unlimited traffic
+// with a green build and no log line.
+//
+// Call it where that mistake is still cheap: at composition, over the names actually
+// mounted, before serving. Checking per request would only rediscover the same wiring
+// fact on every call.
+func (rl *RateLimiter) Registered(name string) bool {
+	if rl == nil {
+		return false
+	}
+	rl.mu.RLock()
+	defer rl.mu.RUnlock()
+	_, ok := rl.configs[name]
+	return ok
+}
+
+// RegisteredNames returns the registered config names in no particular order, so a
+// composition root can diff what it registered against what it mounted rather than
+// probing one name at a time. The slice is a copy; mutating it changes no state.
+func (rl *RateLimiter) RegisteredNames() []string {
+	if rl == nil {
+		return nil
+	}
+	rl.mu.RLock()
+	defer rl.mu.RUnlock()
+	names := make([]string, 0, len(rl.configs))
+	for n := range rl.configs {
+		names = append(names, n)
+	}
+	return names
+}
+
 // Protect reports whether a request under the named config is allowed, plus the remaining
 // tokens and the reset duration. An unregistered name fails OPEN (allow) — registration is the
 // consumer's explicit act, so an unconfigured limit does not block traffic.

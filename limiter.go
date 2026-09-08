@@ -129,6 +129,29 @@ func (rl *RateLimiter) Registered(name string) bool {
 	return ok
 }
 
+// Dimensions returns the opaque dimension labels a registered config keys its buckets
+// on, and whether that name is registered at all. The slice is a copy.
+//
+// It exists so a composition root can check that whatever supplies the per-request
+// dimension VALUES covers every label the config keys on. A label with no supplier
+// contributes an empty value to every request, and Key builds one bucket for all of
+// them — the limit silently becomes global instead of per-dimension, which looks
+// identical to a working limiter until one caller exhausts everyone's tokens.
+func (rl *RateLimiter) Dimensions(name string) ([]string, bool) {
+	if rl == nil {
+		return nil, false
+	}
+	rl.mu.RLock()
+	defer rl.mu.RUnlock()
+	config, ok := rl.configs[name]
+	if !ok {
+		return nil, false
+	}
+	out := make([]string, len(config.Dimensions))
+	copy(out, config.Dimensions)
+	return out, true
+}
+
 // RegisteredNames returns the registered config names in no particular order, so a
 // composition root can diff what it registered against what it mounted rather than
 // probing one name at a time. The slice is a copy; mutating it changes no state.

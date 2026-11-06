@@ -3,6 +3,7 @@ package ratelimit
 import (
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -59,9 +60,13 @@ func (c *RateLimitContext) Key(labels []string) string {
 }
 
 // bucketEntry wraps a TokenBucket with an access timestamp for stale-eviction.
+//
+// lastAccess holds UnixNano and is atomic because getOrCreateBucket refreshes it on the
+// read-locked hit path, where every concurrent request on the key writes it, and
+// evictStale reads it; a read lock does not order those writes against each other.
 type bucketEntry struct {
 	bucket     *TokenBucket
-	lastAccess time.Time
+	lastAccess atomic.Int64
 }
 
 // RateLimiter manages named configs and their per-key token buckets. Thread-safe.
@@ -199,17 +204,19 @@ func (rl *RateLimiter) getOrCreateBucket(key string, config *RateLimitConfig) *T
 	entry, ok := rl.buckets[key]
 	rl.mu.RUnlock()
 	if ok {
-		entry.lastAccess = now
+		entry.lastAccess.Store(now.UnixNano())
 		return entry.bucket
 	}
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	if entry, ok = rl.buckets[key]; ok {
-		entry.lastAccess = now
+		entry.lastAccess.Store(now.UnixNano())
 		return entry.bucket
 	}
 	bucket := NewTokenBucket(float64(config.Capacity), float64(config.RefillRate), config.Interval)
-	rl.buckets[key] = &bucketEntry{bucket: bucket, lastAccess: now}
+	entry = &bucketEntry{bucket: bucket}
+	entry.lastAccess.Store(now.UnixNano())
+	rl.buckets[key] = entry
 	return bucket
 }
 
@@ -229,11 +236,11 @@ func (rl *RateLimiter) cleanup() {
 
 // evictStale removes buckets untouched within maxAge.
 func (rl *RateLimiter) evictStale() {
-	cutoff := time.Now().Add(-rl.maxAge)
+	cutoff := time.Now().Add(-rl.maxAge).UnixNano()
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	for key, entry := range rl.buckets {
-		if entry.lastAccess.Before(cutoff) {
+		if entry.lastAccess.Load() < cutoff {
 			delete(rl.buckets, key)
 		}
 	}

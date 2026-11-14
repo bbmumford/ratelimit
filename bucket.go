@@ -38,6 +38,15 @@ func NewTokenBucket(capacity, refillRate float64, interval time.Duration) *Token
 	}
 }
 
+// NewTokenBucketAt is NewTokenBucket with its refill clock started at start instead of the
+// wall clock, for a caller that judges every call by AllowAt on its own clock (an injected or
+// fixed time): the bucket starts full at start and AllowAt earns tokens only for time after it.
+func NewTokenBucketAt(capacity, refillRate float64, interval time.Duration, start time.Time) *TokenBucket {
+	tb := NewTokenBucket(capacity, refillRate, interval)
+	tb.lastRefill = start
+	return tb
+}
+
 // refill adds tokens based on elapsed time. Must be called with the mutex held.
 func (tb *TokenBucket) refill() {
 	tb.refillAt(time.Now())

@@ -40,13 +40,37 @@ func NewTokenBucket(capacity, refillRate float64, interval time.Duration) *Token
 
 // refill adds tokens based on elapsed time. Must be called with the mutex held.
 func (tb *TokenBucket) refill() {
-	now := time.Now()
+	tb.refillAt(time.Now())
+}
+
+// refillAt adds the tokens earned between the last refill and now. A now that
+// is not after the last refill adds nothing and leaves the last refill where it
+// was, so a clock stepping backwards neither earns nor costs tokens.
+func (tb *TokenBucket) refillAt(now time.Time) {
+	if !now.After(tb.lastRefill) {
+		return
+	}
 	elapsed := now.Sub(tb.lastRefill).Seconds()
 	tb.tokens += elapsed * tb.refillRate
 	if tb.tokens > tb.capacity {
 		tb.tokens = tb.capacity
 	}
 	tb.lastRefill = now
+}
+
+// AllowAt is Allow judged at now, the caller's time, instead of the wall clock:
+// the bucket refills for the time since its last refill and takes cost when it
+// holds that much. Its consumers keep their own clock: a limiter sharing one
+// instant across its checks, a budget whose caller passes the time.
+func (tb *TokenBucket) AllowAt(now time.Time, cost float64) bool {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+	tb.refillAt(now)
+	if tb.tokens >= cost {
+		tb.tokens -= cost
+		return true
+	}
+	return false
 }
 
 // Allow decrements cost tokens and returns true if the request fits, false otherwise.

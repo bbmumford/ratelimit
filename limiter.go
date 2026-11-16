@@ -75,6 +75,8 @@ type RateLimiter struct {
 	buckets map[string]*bucketEntry
 	configs map[string]*RateLimitConfig
 	maxAge  time.Duration
+	// maxKeys caps len(buckets); 0 leaves the map bounded only by the maxAge sweep.
+	maxKeys int
 	stopCh  chan struct{}
 }
 
@@ -84,10 +86,25 @@ func NewRateLimiter() *RateLimiter { return NewRateLimiterWithMaxAge(10 * time.M
 // NewRateLimiterWithMaxAge creates a limiter with a custom unused-bucket expiry and starts its
 // cleanup goroutine (stop it with Stop to avoid a leak).
 func NewRateLimiterWithMaxAge(maxAge time.Duration) *RateLimiter {
+	return NewRateLimiterWithBounds(maxAge, 0)
+}
+
+// NewRateLimiterWithBounds is NewRateLimiterWithMaxAge with the key map capped at maxKeys
+// buckets (maxKeys <= 0: uncapped). It exists for a limiter keyed by a value its caller does
+// not choose, such as a public edge's source address: a caller rotating that value between
+// sweeps would otherwise grow the map without bound. A new key that meets a full map first
+// drops every bucket already back at capacity (a new bucket starts full, so nothing is lost),
+// then, if more than three quarters of the cap is still in use, drops buckets in map order
+// until a quarter is free, so the scan runs once per quarter of the cap rather than per key.
+func NewRateLimiterWithBounds(maxAge time.Duration, maxKeys int) *RateLimiter {
+	if maxKeys < 0 {
+		maxKeys = 0
+	}
 	rl := &RateLimiter{
 		buckets: make(map[string]*bucketEntry),
 		configs: make(map[string]*RateLimitConfig),
 		maxAge:  maxAge,
+		maxKeys: maxKeys,
 		stopCh:  make(chan struct{}),
 	}
 	go rl.cleanup()
@@ -213,11 +230,34 @@ func (rl *RateLimiter) getOrCreateBucket(key string, config *RateLimitConfig) *T
 		entry.lastAccess.Store(now.UnixNano())
 		return entry.bucket
 	}
+	if rl.maxKeys > 0 && len(rl.buckets) >= rl.maxKeys {
+		rl.makeRoomLocked()
+	}
 	bucket := NewTokenBucket(float64(config.Capacity), float64(config.RefillRate), config.Interval)
 	entry = &bucketEntry{bucket: bucket}
 	entry.lastAccess.Store(now.UnixNano())
 	rl.buckets[key] = entry
 	return bucket
+}
+
+// makeRoomLocked brings a full key map under its cap as NewRateLimiterWithBounds describes.
+// Caller holds rl.mu for writing.
+func (rl *RateLimiter) makeRoomLocked() {
+	for key, entry := range rl.buckets {
+		if entry.bucket.Reset() == 0 {
+			delete(rl.buckets, key)
+		}
+	}
+	target := rl.maxKeys - rl.maxKeys/4
+	if target >= rl.maxKeys {
+		target = rl.maxKeys - 1
+	}
+	for key := range rl.buckets {
+		if len(rl.buckets) <= target {
+			return
+		}
+		delete(rl.buckets, key)
+	}
 }
 
 // cleanup evicts stale buckets on a ticker until Stop.

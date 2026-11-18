@@ -46,7 +46,18 @@ type Options struct {
 	// AddHeaders writes X-RateLimit-Remaining and X-RateLimit-Reset on allowed
 	// responses.
 	AddHeaders bool
+	// FailOpen serves a request the limiter could not judge. Unset, such a
+	// request is refused through OnExceeded, because a limit guarding a public
+	// route against abuse that lets traffic through whenever it cannot decide
+	// guards nothing exactly when it is attacked. Only a limit that protects
+	// availability rather than guarding against abuse sets it.
+	FailOpen bool
 }
+
+// protect is the limiter's judgement of one request. It is a variable so a test
+// can hold it to an answer the in-memory limiter never gives, an error, and
+// prove what the middleware does then.
+var protect = (*ratelimit.RateLimiter).Protect
 
 // Limit returns the middleware, or an error describing the wiring mistake.
 //
@@ -82,7 +93,7 @@ func Limit(opts Options) (func(http.Handler) http.Handler, error) {
 	if onExceeded == nil {
 		onExceeded = DefaultOnExceeded
 	}
-	limiter, name, addHeaders := opts.Limiter, opts.Name, opts.AddHeaders
+	limiter, name, addHeaders, failOpen := opts.Limiter, opts.Name, opts.AddHeaders, opts.FailOpen
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -91,11 +102,13 @@ func Limit(opts Options) (func(http.Handler) http.Handler, error) {
 				dims[label] = extract(r)
 			}
 
-			allowed, remaining, reset, err := limiter.Protect(name, &ratelimit.RateLimitContext{Dimensions: dims})
+			allowed, remaining, reset, err := protect(limiter, name, &ratelimit.RateLimitContext{Dimensions: dims})
 			if err != nil {
-				// Fail OPEN. The limiter protects availability, so a limiter fault
-				// that denied traffic would turn its own outage into the service's.
-				next.ServeHTTP(w, r)
+				if failOpen {
+					next.ServeHTTP(w, r)
+					return
+				}
+				onExceeded(w, r, 0, time.Second)
 				return
 			}
 

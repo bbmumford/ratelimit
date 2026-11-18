@@ -234,3 +234,34 @@ func TestMustLimit_PanicsOnWiringMistake(t *testing.T) {
 	rl := newLimiter(t, "api", 1, nil)
 	MustLimit(Options{Limiter: rl, Name: "nope"})
 }
+
+// A request the limiter cannot judge is refused through OnExceeded, and served
+// only when the options say FailOpen.
+func TestLimit_AnUnjudgedRequestIsRefusedUnlessFailOpen(t *testing.T) {
+	rl := ratelimit.NewRateLimiter()
+	defer rl.Stop()
+	rl.Register("login", &ratelimit.RateLimitConfig{Mode: ratelimit.ModeTokenBucket, Capacity: 5, RefillRate: 5,
+		Interval: time.Minute, Dimensions: []string{"ip"}})
+	prev := protect
+	protect = func(*ratelimit.RateLimiter, string, *ratelimit.RateLimitContext) (bool, int, time.Duration, error) {
+		return false, 0, 0, errors.New("state unreadable")
+	}
+	defer func() { protect = prev }()
+
+	for _, tc := range []struct {
+		failOpen bool
+		want     int
+	}{{false, http.StatusTooManyRequests}, {true, http.StatusOK}} {
+		mw, err := Limit(Options{Limiter: rl, Name: "login", FailOpen: tc.failOpen,
+			Extractors: map[string]func(*http.Request) string{"ip": func(*http.Request) string { return "198.51.100.7" }}})
+		if err != nil {
+			t.Fatalf("Limit: %v", err)
+		}
+		w := httptest.NewRecorder()
+		mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })).
+			ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/login", nil))
+		if w.Code != tc.want {
+			t.Errorf("FailOpen %v: an unjudged request answered %d, want %d", tc.failOpen, w.Code, tc.want)
+		}
+	}
+}

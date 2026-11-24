@@ -24,7 +24,7 @@ type Keyed struct {
 
 	mu    sync.Mutex
 	rl    *RateLimiter
-	names map[string]bool // the names Set registered on rl
+	names map[string]bool // the names Set registered on rl and Unlimited has not lifted
 }
 
 // NewKeyed returns a Keyed whose buckets idle for maxAge are swept and whose key
@@ -62,6 +62,19 @@ func (k *Keyed) Set(name string, rate, burst int, interval time.Duration) {
 		Interval:   interval,
 		Dimensions: []string{keyedDimension},
 	})
+}
+
+// Unlimited declares that the composition deliberately leaves name without a
+// limit: Allow admits every request under it until a Set of name limits it.
+// It runs at composition, as Set does, and is how a caller says "no limit"
+// rather than leaving the name undeclared.
+func (k *Keyed) Unlimited(name string) {
+	if k == nil {
+		return
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	delete(k.names, name)
 }
 
 // Allow spends one request of the limit name for key. A refusal returns the

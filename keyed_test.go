@@ -64,3 +64,25 @@ func TestKeyedHoldsItsKeyCap(t *testing.T) {
 		t.Fatalf("%d buckets held, want at most the cap of 16", n)
 	}
 }
+
+// A name declared Unlimited admits every request until a Set limits it, and a
+// later Unlimited lifts the limit again.
+func TestKeyedUnlimitedDeclaresANameWithoutALimit(t *testing.T) {
+	k := NewKeyed(time.Minute, 100)
+	defer k.Stop()
+	k.Unlimited("open")
+	for i := 0; i < 20; i++ {
+		if ok, _ := k.Allow("open", "a"); !ok {
+			t.Fatal("an Unlimited name refused")
+		}
+	}
+	k.Set("open", 1, 1, time.Hour)
+	k.Allow("open", "a")
+	if ok, _ := k.Allow("open", "a"); ok {
+		t.Fatal("a Set after Unlimited did not limit the name")
+	}
+	k.Unlimited("open")
+	if ok, _ := k.Allow("open", "a"); !ok {
+		t.Fatal("an Unlimited after Set did not lift the limit")
+	}
+}

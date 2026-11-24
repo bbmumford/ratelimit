@@ -28,12 +28,19 @@ type TokenBucket struct {
 }
 
 // NewTokenBucket creates a token bucket. capacity is the burst size; refillRate is tokens
-// added per interval (converted internally to per-second). The bucket starts full.
+// added per interval (converted internally to per-second). The bucket starts full. An interval
+// that is not positive, or a negative refillRate, gives a bucket that never refills: it admits
+// its burst and then nothing, rather than a refill rate of +Inf or NaN that would admit every
+// request.
 func NewTokenBucket(capacity, refillRate float64, interval time.Duration) *TokenBucket {
+	perSecond := 0.0
+	if interval > 0 && refillRate > 0 {
+		perSecond = refillRate / interval.Seconds()
+	}
 	return &TokenBucket{
 		capacity:   capacity,
 		tokens:     capacity,
-		refillRate: refillRate / interval.Seconds(),
+		refillRate: perSecond,
 		lastRefill: time.Now(),
 	}
 }

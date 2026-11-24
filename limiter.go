@@ -128,15 +128,24 @@ func (rl *RateLimiter) Stop() {
 	}
 }
 
-// Register adds a named config.
-func (rl *RateLimiter) Register(name string, config *RateLimitConfig) {
+// ErrInvalidConfig is Register's answer for a config it cannot enforce: nil, or a token bucket
+// whose Interval is not positive (a refill per zero interval is an unbounded rate). The name is
+// not registered, so Protect refuses it and httprate.Limit refuses to mount it.
+var ErrInvalidConfig = errors.New("ratelimit: the config is nil or its interval is not positive")
+
+// Register adds a named config, or answers ErrInvalidConfig and registers nothing.
+func (rl *RateLimiter) Register(name string, config *RateLimitConfig) error {
 	if rl == nil {
-		return
+		return ErrNotRegistered
+	}
+	if config == nil || config.Interval <= 0 {
+		return ErrInvalidConfig
 	}
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	config.Name = name
 	rl.configs[name] = config
+	return nil
 }
 
 // Registered reports whether a config is registered under name.

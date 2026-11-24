@@ -10,6 +10,10 @@ import (
 // ErrNoStore is returned (fail-closed) when AllowWindow is called without a WindowStore.
 var ErrNoStore = errors.New("ratelimit: no window store")
 
+// ErrInvalidWindow is returned (fail-closed) for a window that is not positive: truncating to it
+// would make every instant a window of its own, so no count would ever pass the limit.
+var ErrInvalidWindow = errors.New("ratelimit: the window is not positive")
+
 // WindowStore is a consumer-supplied backend for distributed, persistent window-based limiting
 // — the counterpart to the in-memory TokenBucket. The neutral module owns the windowing logic;
 // the consumer implements Incr over any store (SQL, tursokv, Redis, …), so ratelimit stays
@@ -25,7 +29,8 @@ type WindowStore interface {
 
 // AllowWindow performs distributed window-based rate limiting via a consumer WindowStore. The
 // window is time.Now().UTC() truncated to `window`; the counter increments once per call and the
-// request is allowed while count <= limit. A non-positive limit disables the check (unlimited).
+// request is allowed while count <= limit. A non-positive limit disables the check (unlimited);
+// a non-positive window fails CLOSED with ErrInvalidWindow.
 // A nil store or a store error fails CLOSED (denied) — a missing/failing seam never allows.
 // This is the store-agnostic, distributed counterpart to the local TokenBucket.
 func AllowWindow(ctx context.Context, store WindowStore, scope, key string, limit int, window time.Duration) (allowed bool, remaining int, resetAt time.Time, err error) {
@@ -40,6 +45,9 @@ func AllowWindowAt(ctx context.Context, store WindowStore, scope, key string, li
 	if limit <= 0 {
 		// disabled or effectively unlimited
 		return true, limit, now.Add(window), nil
+	}
+	if window <= 0 {
+		return false, 0, now, ErrInvalidWindow
 	}
 	start := now.Truncate(window)
 	resetAt = start.Add(window)
@@ -69,6 +77,9 @@ type WindowPeeker interface {
 // without incrementing (not a WindowPeeker) fails closed with ErrNoStore.
 func PeekWindow(ctx context.Context, store WindowStore, scope, key string, limit int, window time.Duration, now time.Time) (remaining int, resetAt time.Time, err error) {
 	now = now.UTC()
+	if limit > 0 && window <= 0 {
+		return 0, now, ErrInvalidWindow
+	}
 	start := now.Truncate(window)
 	resetAt = start.Add(window)
 	if limit <= 0 {

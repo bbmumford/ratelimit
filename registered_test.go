@@ -5,6 +5,7 @@
 package ratelimit
 
 import (
+	"errors"
 	"sort"
 	"testing"
 	"time"
@@ -34,23 +35,22 @@ func TestRegisteredDistinguishesMountedFromRegistered(t *testing.T) {
 }
 
 // The reason Registered exists: Protect cannot tell these two apart.
-func TestProtectCannotDistinguishUnlimitedFromWithinLimit(t *testing.T) {
+func TestProtectRefusesAMountedNameThatIsNotRegistered(t *testing.T) {
 	rl := newTestLimiter(t, "api")
 	ctx := &RateLimitContext{}
 
 	allowedReal, _, _, errReal := rl.Protect("api", ctx)
 	allowedMissing, _, _, errMissing := rl.Protect("api_typo", ctx)
 
-	if !allowedReal || !allowedMissing {
-		t.Fatalf("expected both allowed, got real=%v missing=%v", allowedReal, allowedMissing)
+	if !allowedReal || errReal != nil {
+		t.Fatalf("the registered name = (%v, %v), want allowed", allowedReal, errReal)
 	}
-	if errReal != nil || errMissing != nil {
-		t.Fatalf("expected nil errors, got real=%v missing=%v", errReal, errMissing)
+	if allowedMissing || !errors.Is(errMissing, ErrNotRegistered) {
+		t.Fatalf("the typo = (%v, %v), want refused with ErrNotRegistered", allowedMissing, errMissing)
 	}
-	// Identical answers for "passed the limit" and "there is no limit" — which is
-	// exactly why a caller needs Registered to catch the wiring mistake at boot.
+	// Registered finds the same mistake at boot, before a request is refused.
 	if rl.Registered("api_typo") {
-		t.Fatal("Registered must be the thing that separates these two cases")
+		t.Fatal("Registered reported the typo as registered")
 	}
 }
 

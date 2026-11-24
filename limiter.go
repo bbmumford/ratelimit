@@ -141,16 +141,11 @@ func (rl *RateLimiter) Register(name string, config *RateLimitConfig) {
 
 // Registered reports whether a config is registered under name.
 //
-// It exists because Protect fails OPEN on an unregistered name and says so only by
-// allowing the request: it returns a nil error either way, so a caller cannot tell a
-// request that passed a limit from one that met no limit at all. A name that is
-// mounted but never registered — a typo, a registration dropped while moving a
-// consumer off a shared package-level limiter — therefore serves unlimited traffic
-// with a green build and no log line.
-//
-// Call it where that mistake is still cheap: at composition, over the names actually
-// mounted, before serving. Checking per request would only rediscover the same wiring
-// fact on every call.
+// Protect refuses an unregistered name with ErrNotRegistered on every request, so a
+// name that is mounted but never registered — a typo, a registration dropped while
+// moving a consumer off a shared package-level limiter — refuses all its traffic.
+// Registered finds that mistake where it is still cheap: at composition, over the
+// names actually mounted, before serving.
 func (rl *RateLimiter) Registered(name string) bool {
 	if rl == nil {
 		return false
@@ -200,15 +195,25 @@ func (rl *RateLimiter) RegisteredNames() []string {
 	return names
 }
 
+// ErrNotRegistered is Protect's answer for a name no config is registered under: the request is
+// not judged, and a caller limiting abuse refuses it.
+var ErrNotRegistered = errors.New("ratelimit: no config is registered under the name")
+
 // Protect reports whether a request under the named config is allowed, plus the remaining
-// tokens and the reset duration. An unregistered name fails OPEN (allow) — registration is the
-// consumer's explicit act, so an unconfigured limit does not block traffic.
+// tokens and the reset duration. A request it cannot judge is not allowed and carries the
+// reason as err: a name no config is registered under (ErrNotRegistered), a nil limiter
+// (ErrNotRegistered), or a new key a full bounded map cannot hold (ErrNoRoom). Abuse limits
+// fail closed, so a caller refuses such a request; only a limit that protects availability
+// rather than guarding against abuse may serve it.
 func (rl *RateLimiter) Protect(name string, ctx *RateLimitContext) (allowed bool, remaining int, reset time.Duration, err error) {
+	if rl == nil {
+		return false, 0, 0, ErrNotRegistered
+	}
 	rl.mu.RLock()
 	config, ok := rl.configs[name]
 	rl.mu.RUnlock()
 	if !ok {
-		return true, -1, 0, nil
+		return false, 0, 0, ErrNotRegistered
 	}
 	if config.Skip != nil && config.Skip(ctx) {
 		return true, -1, 0, nil

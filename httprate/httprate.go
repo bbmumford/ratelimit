@@ -31,8 +31,8 @@ type Options struct {
 	Limiter *ratelimit.RateLimiter
 
 	// Name selects the registered config. Required, and Limit rejects a name the
-	// limiter does not know: Protect treats an unregistered name as allow, so a
-	// typo here would mount a middleware that limits nothing and looks mounted.
+	// limiter does not know, so the mistake surfaces at mount rather than as a
+	// route that refuses every request.
 	Name string
 
 	// Extractors supplies the per-request value for each opaque dimension label
@@ -53,11 +53,6 @@ type Options struct {
 	// availability rather than guarding against abuse sets it.
 	FailOpen bool
 }
-
-// protect is the limiter's judgement of one request. It is a variable so a test
-// can hold it to an answer the in-memory limiter never gives, an error, and
-// prove what the middleware does then.
-var protect = (*ratelimit.RateLimiter).Protect
 
 // Limit returns the middleware, or an error describing the wiring mistake.
 //
@@ -102,7 +97,9 @@ func Limit(opts Options) (func(http.Handler) http.Handler, error) {
 				dims[label] = extract(r)
 			}
 
-			allowed, remaining, reset, err := protect(limiter, name, &ratelimit.RateLimitContext{Dimensions: dims})
+			// An error is a request the limiter could not judge (a full bounded key
+			// map, ratelimit.ErrNoRoom): refused unless the options say FailOpen.
+			allowed, remaining, reset, err := limiter.Protect(name, &ratelimit.RateLimitContext{Dimensions: dims})
 			if err != nil {
 				if failOpen {
 					next.ServeHTTP(w, r)

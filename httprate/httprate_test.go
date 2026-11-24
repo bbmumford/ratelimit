@@ -236,17 +236,20 @@ func TestMustLimit_PanicsOnWiringMistake(t *testing.T) {
 }
 
 // A request the limiter cannot judge is refused through OnExceeded, and served
-// only when the options say FailOpen.
+// only when the options say FailOpen. A bounded limiter whose key map is full
+// of spent buckets cannot judge a new key (ratelimit.ErrNoRoom).
 func TestLimit_AnUnjudgedRequestIsRefusedUnlessFailOpen(t *testing.T) {
-	rl := ratelimit.NewRateLimiter()
+	rl := ratelimit.NewRateLimiterWithBounds(time.Hour, 1)
 	defer rl.Stop()
-	rl.Register("login", &ratelimit.RateLimitConfig{Mode: ratelimit.ModeTokenBucket, Capacity: 5, RefillRate: 5,
-		Interval: time.Minute, Dimensions: []string{"ip"}})
-	prev := protect
-	protect = func(*ratelimit.RateLimiter, string, *ratelimit.RateLimitContext) (bool, int, time.Duration, error) {
-		return false, 0, 0, errors.New("state unreadable")
+	rl.Register("login", &ratelimit.RateLimitConfig{Mode: ratelimit.ModeTokenBucket, Capacity: 1, RefillRate: 1,
+		Interval: time.Hour, Dimensions: []string{"ip"}})
+	spent := &ratelimit.RateLimitContext{Dimensions: map[string]string{"ip": "198.51.100.1"}}
+	if ok, _, _, err := rl.Protect("login", spent); !ok || err != nil {
+		t.Fatalf("the first key's request = (%v, %v)", ok, err)
 	}
-	defer func() { protect = prev }()
+	if _, _, _, err := rl.Protect("login", &ratelimit.RateLimitContext{Dimensions: map[string]string{"ip": "198.51.100.7"}}); !errors.Is(err, ratelimit.ErrNoRoom) {
+		t.Fatalf("a new key at the full map: err %v, want ErrNoRoom", err)
+	}
 
 	for _, tc := range []struct {
 		failOpen bool

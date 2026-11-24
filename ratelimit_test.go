@@ -1,6 +1,7 @@
 package ratelimit
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -110,11 +111,15 @@ func TestRateLimiter_MultiDimensionCombo(t *testing.T) {
 	}
 }
 
-func TestRateLimiter_UnregisteredFailsOpen(t *testing.T) {
+func TestRateLimiter_UnregisteredFailsClosed(t *testing.T) {
 	rl := NewRateLimiterWithMaxAge(time.Hour)
 	defer rl.Stop()
-	if ok, _, _, _ := rl.Protect("never-registered", ctxWith(nil)); !ok {
-		t.Fatal("an unregistered config must fail OPEN (allow)")
+	if ok, _, _, err := rl.Protect("never-registered", ctxWith(nil)); ok || !errors.Is(err, ErrNotRegistered) {
+		t.Fatalf("an unregistered config = (%v, %v), want a refusal with ErrNotRegistered", ok, err)
+	}
+	var none *RateLimiter
+	if ok, _, _, err := none.Protect("any", ctxWith(nil)); ok || !errors.Is(err, ErrNotRegistered) {
+		t.Fatalf("a nil limiter = (%v, %v), want a refusal with ErrNotRegistered", ok, err)
 	}
 }
 

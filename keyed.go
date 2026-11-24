@@ -22,8 +22,9 @@ type Keyed struct {
 	maxAge  time.Duration
 	maxKeys int
 
-	mu sync.Mutex
-	rl *RateLimiter
+	mu    sync.Mutex
+	rl    *RateLimiter
+	names map[string]bool // the names Set registered on rl
 }
 
 // NewKeyed returns a Keyed whose buckets idle for maxAge are swept and whose key
@@ -48,6 +49,10 @@ func (k *Keyed) Set(name string, rate, burst int, interval time.Duration) {
 	if k.rl == nil {
 		k.rl = NewRateLimiterWithBounds(k.maxAge, k.maxKeys)
 	}
+	if k.names == nil {
+		k.names = map[string]bool{}
+	}
+	k.names[name] = true
 	rl := k.rl
 	k.mu.Unlock()
 	rl.Register(name, &RateLimitConfig{
@@ -67,9 +72,9 @@ func (k *Keyed) Allow(name, key string) (ok bool, retryAfter time.Duration) {
 		return true, 0
 	}
 	k.mu.Lock()
-	rl := k.rl
+	rl, set := k.rl, k.names[name]
 	k.mu.Unlock()
-	if rl == nil {
+	if rl == nil || !set {
 		return true, 0
 	}
 	allowed, _, reset, err := rl.Protect(name, &RateLimitContext{Dimensions: map[string]string{keyedDimension: key}})

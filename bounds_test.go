@@ -1,6 +1,7 @@
 package ratelimit
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -13,8 +14,12 @@ func TestBoundedLimiter_KeyRotationStaysUnderTheCap(t *testing.T) {
 	rl.Register("ip", &RateLimitConfig{Capacity: 2, RefillRate: 1, Interval: time.Hour, Dimensions: []string{"ip"}})
 	for i := 0; i < 10_000; i++ {
 		ctx := &RateLimitContext{Dimensions: map[string]string{"ip": fmt.Sprintf("198.51.100.%d", i)}}
-		if allowed, _, _, _ := rl.Protect("ip", ctx); !allowed {
-			t.Fatalf("request %d is the first on its key and must be allowed", i)
+		allowed, _, _, err := rl.Protect("ip", ctx)
+		switch {
+		case i < 100 && !allowed:
+			t.Fatalf("request %d is the first on its key, the map has room, and it was refused", i)
+		case i >= 100 && (allowed || !errors.Is(err, ErrNoRoom)):
+			t.Fatalf("request %d on a new key found the map full of spent buckets: allowed %v, err %v; want ErrNoRoom", i, allowed, err)
 		}
 		if n := rl.BucketCount(); n > 100 {
 			t.Fatalf("after %d keys the map holds %d buckets, cap 100", i+1, n)

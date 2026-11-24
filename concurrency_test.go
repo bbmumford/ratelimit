@@ -56,7 +56,8 @@ func TestRateLimiter_EvictStaleKeepsATouchedBucketAndDropsAnUntouchedOne(t *test
 	const maxAge = 200 * time.Millisecond
 	rl := NewRateLimiterWithMaxAge(maxAge)
 	defer rl.Stop()
-	rl.Register("op", cfg("k"))
+	// Refills within the sleep below, so the idle bucket is back at capacity when swept.
+	rl.Register("op", &RateLimitConfig{Mode: ModeTokenBucket, Capacity: 2, RefillRate: 1000, Interval: time.Second, Dimensions: []string{"k"}})
 	touched := ctxWith(map[string]string{"k": "touched"})
 	idle := ctxWith(map[string]string{"k": "idle"})
 	rl.Protect("op", touched)

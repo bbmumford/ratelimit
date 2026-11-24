@@ -1,6 +1,7 @@
 package ratelimit
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -77,8 +78,17 @@ type RateLimiter struct {
 	maxAge  time.Duration
 	// maxKeys caps len(buckets); 0 leaves the map bounded only by the maxAge sweep.
 	maxKeys int
-	stopCh  chan struct{}
+	// fullUntil is when a full map's soonest bucket is back at capacity: until then a new key is
+	// refused without scanning the map again, so a stream of new keys costs one scan per refill.
+	fullUntil time.Time
+	stopCh    chan struct{}
 }
+
+// ErrNoRoom is Protect's answer for a new key that a bounded limiter's full key map cannot hold:
+// every bucket in it is still below capacity, and dropping one would hand that key a full bucket
+// on its next request, resetting its limit. The request is not judged; a caller limiting abuse
+// refuses it.
+var ErrNoRoom = errors.New("ratelimit: the key map is full of buckets still below capacity")
 
 // NewRateLimiter creates a limiter with a 10-minute unused-bucket expiry.
 func NewRateLimiter() *RateLimiter { return NewRateLimiterWithMaxAge(10 * time.Minute) }
@@ -92,10 +102,10 @@ func NewRateLimiterWithMaxAge(maxAge time.Duration) *RateLimiter {
 // NewRateLimiterWithBounds is NewRateLimiterWithMaxAge with the key map capped at maxKeys
 // buckets (maxKeys <= 0: uncapped). It exists for a limiter keyed by a value its caller does
 // not choose, such as a public edge's source address: a caller rotating that value between
-// sweeps would otherwise grow the map without bound. A new key that meets a full map first
-// drops every bucket already back at capacity (a new bucket starts full, so nothing is lost),
-// then, if more than three quarters of the cap is still in use, drops buckets in map order
-// until a quarter is free, so the scan runs once per quarter of the cap rather than per key.
+// sweeps would otherwise grow the map without bound. A new key that meets a full map drops
+// every bucket already back at capacity (a new bucket starts full, so nothing is lost) and
+// never one still below it, whose spent tokens are the limit's state: if none is back at
+// capacity, the new key is refused with ErrNoRoom until the soonest bucket refills.
 func NewRateLimiterWithBounds(maxAge time.Duration, maxKeys int) *RateLimiter {
 	if maxKeys < 0 {
 		maxKeys = 0
@@ -204,7 +214,10 @@ func (rl *RateLimiter) Protect(name string, ctx *RateLimitContext) (allowed bool
 		return true, -1, 0, nil
 	}
 	key := name + ":" + ctx.Key(config.Dimensions)
-	bucket := rl.getOrCreateBucket(key, config)
+	bucket, err := rl.getOrCreateBucket(key, config)
+	if err != nil {
+		return false, 0, 0, err
+	}
 	cost := config.TokenCost
 	if cost <= 0 {
 		cost = 1
@@ -214,50 +227,57 @@ func (rl *RateLimiter) Protect(name string, ctx *RateLimitContext) (allowed bool
 	return allowed, remainingInt, time.Duration(resetSeconds) * time.Second, nil
 }
 
-// getOrCreateBucket returns the bucket for key, creating it under the write lock if absent.
-func (rl *RateLimiter) getOrCreateBucket(key string, config *RateLimitConfig) *TokenBucket {
+// getOrCreateBucket returns the bucket for key, creating it under the write lock if absent; a
+// new key a full bounded map cannot hold is refused with ErrNoRoom.
+func (rl *RateLimiter) getOrCreateBucket(key string, config *RateLimitConfig) (*TokenBucket, error) {
 	now := time.Now()
 	rl.mu.RLock()
 	entry, ok := rl.buckets[key]
 	rl.mu.RUnlock()
 	if ok {
 		entry.lastAccess.Store(now.UnixNano())
-		return entry.bucket
+		return entry.bucket, nil
 	}
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	if entry, ok = rl.buckets[key]; ok {
 		entry.lastAccess.Store(now.UnixNano())
-		return entry.bucket
+		return entry.bucket, nil
 	}
-	if rl.maxKeys > 0 && len(rl.buckets) >= rl.maxKeys {
-		rl.makeRoomLocked()
+	if rl.maxKeys > 0 && len(rl.buckets) >= rl.maxKeys && !rl.makeRoomLocked(now) {
+		return nil, ErrNoRoom
 	}
 	bucket := NewTokenBucket(float64(config.Capacity), float64(config.RefillRate), config.Interval)
 	entry = &bucketEntry{bucket: bucket}
 	entry.lastAccess.Store(now.UnixNano())
 	rl.buckets[key] = entry
-	return bucket
+	return bucket, nil
 }
 
-// makeRoomLocked brings a full key map under its cap as NewRateLimiterWithBounds describes.
-// Caller holds rl.mu for writing.
-func (rl *RateLimiter) makeRoomLocked() {
+// makeRoomLocked drops every bucket of a full key map that is back at capacity, as
+// NewRateLimiterWithBounds describes, and reports whether the map now has room. When it has
+// none it records when the soonest bucket will be back at capacity, and before then answers
+// false without scanning. Caller holds rl.mu for writing.
+func (rl *RateLimiter) makeRoomLocked(now time.Time) bool {
+	if now.Before(rl.fullUntil) {
+		return false
+	}
+	soonest := time.Duration(-1)
 	for key, entry := range rl.buckets {
-		if entry.bucket.Reset() == 0 {
+		reset := entry.bucket.Reset()
+		if reset == 0 {
 			delete(rl.buckets, key)
+			continue
+		}
+		if soonest < 0 || reset < soonest {
+			soonest = reset
 		}
 	}
-	target := rl.maxKeys - rl.maxKeys/4
-	if target >= rl.maxKeys {
-		target = rl.maxKeys - 1
+	if len(rl.buckets) < rl.maxKeys {
+		return true
 	}
-	for key := range rl.buckets {
-		if len(rl.buckets) <= target {
-			return
-		}
-		delete(rl.buckets, key)
-	}
+	rl.fullUntil = now.Add(soonest)
+	return false
 }
 
 // cleanup evicts stale buckets on a ticker until Stop.
@@ -274,13 +294,15 @@ func (rl *RateLimiter) cleanup() {
 	}
 }
 
-// evictStale removes buckets untouched within maxAge.
+// evictStale removes buckets untouched within maxAge that are back at capacity. A bucket still
+// below capacity is kept however long it has been idle: dropping it would hand its key a full
+// bucket on the next request, resetting the limit before it has refilled.
 func (rl *RateLimiter) evictStale() {
 	cutoff := time.Now().Add(-rl.maxAge).UnixNano()
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	for key, entry := range rl.buckets {
-		if entry.lastAccess.Load() < cutoff {
+		if entry.lastAccess.Load() < cutoff && entry.bucket.Reset() == 0 {
 			delete(rl.buckets, key)
 		}
 	}

@@ -16,10 +16,12 @@ func newTestLimiter(t *testing.T, names ...string) *RateLimiter {
 	rl := NewRateLimiter()
 	t.Cleanup(rl.Stop)
 	for _, n := range names {
-		rl.Register(n, &RateLimitConfig{
+		if err := rl.Register(n, &RateLimitConfig{
 			Mode: ModeTokenBucket, Capacity: 1, RefillRate: 1, Interval: time.Minute,
 			Dimensions: []string{"ip"},
-		})
+		}); err != nil {
+			t.Fatalf("rl.Register: %v", err)
+		}
 	}
 	return rl
 }

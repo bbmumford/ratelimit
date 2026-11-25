@@ -14,13 +14,15 @@ func newLimiter(t *testing.T, name string, capacity int, dims []string) *ratelim
 	t.Helper()
 	rl := ratelimit.NewRateLimiter()
 	t.Cleanup(rl.Stop)
-	rl.Register(name, &ratelimit.RateLimitConfig{
+	if err := rl.Register(name, &ratelimit.RateLimitConfig{
 		Mode:       ratelimit.ModeTokenBucket,
 		Capacity:   capacity,
 		RefillRate: 0,
 		Interval:   time.Minute,
 		Dimensions: dims,
-	})
+	}); err != nil {
+		t.Fatalf("rl.Register: %v", err)
+	}
 	return rl
 }
 
@@ -178,10 +180,12 @@ func TestLimit_ExtractorMapMutationAfterMountIsIgnored(t *testing.T) {
 func TestLimit_NoHeadersWhenNoLimitApplied(t *testing.T) {
 	rl := ratelimit.NewRateLimiter()
 	t.Cleanup(rl.Stop)
-	rl.Register("api", &ratelimit.RateLimitConfig{
+	if err := rl.Register("api", &ratelimit.RateLimitConfig{
 		Mode: ratelimit.ModeTokenBucket, Capacity: 1, Interval: time.Minute,
 		Skip: func(*ratelimit.RateLimitContext) bool { return true },
-	})
+	}); err != nil {
+		t.Fatalf("rl.Register: %v", err)
+	}
 	mw, err := Limit(Options{Limiter: rl, Name: "api", AddHeaders: true})
 	if err != nil {
 		t.Fatalf("Limit: %v", err)
@@ -241,8 +245,10 @@ func TestMustLimit_PanicsOnWiringMistake(t *testing.T) {
 func TestLimit_AnUnjudgedRequestIsRefusedUnlessFailOpen(t *testing.T) {
 	rl := ratelimit.NewRateLimiterWithBounds(time.Hour, 1)
 	defer rl.Stop()
-	rl.Register("login", &ratelimit.RateLimitConfig{Mode: ratelimit.ModeTokenBucket, Capacity: 1, RefillRate: 1,
-		Interval: time.Hour, Dimensions: []string{"ip"}})
+	if err := rl.Register("login", &ratelimit.RateLimitConfig{Mode: ratelimit.ModeTokenBucket, Capacity: 1, RefillRate: 1,
+		Interval: time.Hour, Dimensions: []string{"ip"}}); err != nil {
+		t.Fatalf("rl.Register: %v", err)
+	}
 	spent := &ratelimit.RateLimitContext{Dimensions: map[string]string{"ip": "198.51.100.1"}}
 	if ok, _, _, err := rl.Protect("login", spent); !ok || err != nil {
 		t.Fatalf("the first key's request = (%v, %v)", ok, err)

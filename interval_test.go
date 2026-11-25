@@ -12,7 +12,9 @@ import (
 func TestAZeroIntervalOrWindowKeepsTheLimit(t *testing.T) {
 	rl := NewRateLimiterWithMaxAge(time.Hour)
 	defer rl.Stop()
-	rl.Register("op", &RateLimitConfig{Mode: ModeTokenBucket, Capacity: 1, RefillRate: 1, Interval: 0, Dimensions: []string{"k"}})
+	if err := rl.Register("op", &RateLimitConfig{Mode: ModeTokenBucket, Capacity: 1, RefillRate: 1, Interval: 0, Dimensions: []string{"k"}}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("Register of a zero interval answered %v, want ErrInvalidConfig", err)
+	}
 	allowed := 0
 	for i := 0; i < 100; i++ {
 		if ok, _, _, _ := rl.Protect("op", &RateLimitContext{Dimensions: map[string]string{"k": "a"}}); ok {

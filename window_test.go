@@ -50,7 +50,9 @@ func TestAllowWindow_IndependentKeys(t *testing.T) {
 	ctx := context.Background()
 	// exhaust acme
 	for i := 0; i < 2; i++ {
-		AllowWindow(ctx, store, "op", "acme", 2, time.Minute)
+		if _, _, _, err := AllowWindow(ctx, store, "op", "acme", 2, time.Minute); err != nil {
+			t.Fatalf("AllowWindow: %v", err)
+		}
 	}
 	if ok, _, _, _ := AllowWindow(ctx, store, "op", "acme", 2, time.Minute); ok {
 		t.Fatal("acme should be exhausted")

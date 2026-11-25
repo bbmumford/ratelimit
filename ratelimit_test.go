@@ -57,7 +57,9 @@ func ctxWith(m map[string]string) *RateLimitContext { return &RateLimitContext{D
 func TestRateLimiter_ProtectSharedBucket(t *testing.T) {
 	rl := NewRateLimiterWithMaxAge(time.Hour)
 	defer rl.Stop()
-	rl.Register("op", cfg("tenant"))
+	if err := rl.Register("op", cfg("tenant")); err != nil {
+		t.Fatalf("rl.Register: %v", err)
+	}
 	c := ctxWith(map[string]string{"tenant": "acme"})
 	for i := 0; i < 2; i++ {
 		if ok, _, _, _ := rl.Protect("op", c); !ok {
@@ -75,12 +77,18 @@ func TestRateLimiter_ProtectSharedBucket(t *testing.T) {
 func TestRateLimiter_OpaqueDimensionsAreIndependent(t *testing.T) {
 	rl := NewRateLimiterWithMaxAge(time.Hour)
 	defer rl.Stop()
-	rl.Register("op", cfg("tenant"))
+	if err := rl.Register("op", cfg("tenant")); err != nil {
+		t.Fatalf("rl.Register: %v", err)
+	}
 	acme := ctxWith(map[string]string{"tenant": "acme"})
 	globex := ctxWith(map[string]string{"tenant": "globex"})
 	// drain acme's bucket
-	rl.Protect("op", acme)
-	rl.Protect("op", acme)
+	if _, _, _, err := rl.Protect("op", acme); err != nil {
+		t.Fatalf("rl.Protect: %v", err)
+	}
+	if _, _, _, err := rl.Protect("op", acme); err != nil {
+		t.Fatalf("rl.Protect: %v", err)
+	}
 	if ok, _, _, _ := rl.Protect("op", acme); ok {
 		t.Fatal("acme should be exhausted")
 	}
@@ -89,7 +97,9 @@ func TestRateLimiter_OpaqueDimensionsAreIndependent(t *testing.T) {
 		t.Fatal("a different dimension value must have its own bucket (independent limit)")
 	}
 	// the label itself is opaque: a config keyed on "planet" behaves identically
-	rl.Register("op2", cfg("planet"))
+	if err := rl.Register("op2", cfg("planet")); err != nil {
+		t.Fatalf("rl.Register: %v", err)
+	}
 	if ok, _, _, _ := rl.Protect("op2", ctxWith(map[string]string{"planet": "mars"})); !ok {
 		t.Fatal("an arbitrary opaque label must work exactly like any other")
 	}
@@ -98,11 +108,17 @@ func TestRateLimiter_OpaqueDimensionsAreIndependent(t *testing.T) {
 func TestRateLimiter_MultiDimensionCombo(t *testing.T) {
 	rl := NewRateLimiterWithMaxAge(time.Hour)
 	defer rl.Stop()
-	rl.Register("op", cfg("tenant", "user"))
+	if err := rl.Register("op", cfg("tenant", "user")); err != nil {
+		t.Fatalf("rl.Register: %v", err)
+	}
 	a1 := ctxWith(map[string]string{"tenant": "acme", "user": "u1"})
 	a2 := ctxWith(map[string]string{"tenant": "acme", "user": "u2"}) // same tenant, different user → distinct bucket
-	rl.Protect("op", a1)
-	rl.Protect("op", a1)
+	if _, _, _, err := rl.Protect("op", a1); err != nil {
+		t.Fatalf("rl.Protect: %v", err)
+	}
+	if _, _, _, err := rl.Protect("op", a1); err != nil {
+		t.Fatalf("rl.Protect: %v", err)
+	}
 	if ok, _, _, _ := rl.Protect("op", a1); ok {
 		t.Fatal("acme/u1 exhausted")
 	}
@@ -128,7 +144,9 @@ func TestRateLimiter_SkipBypasses(t *testing.T) {
 	defer rl.Stop()
 	c := cfg("ip")
 	c.Skip = func(*RateLimitContext) bool { return true }
-	rl.Register("op", c)
+	if err := rl.Register("op", c); err != nil {
+		t.Fatalf("rl.Register: %v", err)
+	}
 	ctx := ctxWith(map[string]string{"ip": "1.2.3.4"})
 	for i := 0; i < 10; i++ { // far beyond capacity 2
 		if ok, _, _, _ := rl.Protect("op", ctx); !ok {

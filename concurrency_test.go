@@ -14,7 +14,9 @@ import (
 func TestRateLimiter_ConcurrentRequestsOnOneBucketDoNotRace(t *testing.T) {
 	rl := NewRateLimiterWithMaxAge(time.Hour)
 	defer rl.Stop()
-	rl.Register("root", &RateLimitConfig{Mode: ModeTokenBucket, Capacity: 1000, RefillRate: 1000, Interval: time.Second, Dimensions: []string{"ip"}})
+	if err := rl.Register("root", &RateLimitConfig{Mode: ModeTokenBucket, Capacity: 1000, RefillRate: 1000, Interval: time.Second, Dimensions: []string{"ip"}}); err != nil {
+		t.Fatalf("rl.Register: %v", err)
+	}
 	ctx := ctxWith(map[string]string{"ip": "203.0.113.7"})
 	if ok, _, _, _ := rl.Protect("root", ctx); !ok {
 		t.Fatal("the first request must create the bucket and pass")
@@ -29,7 +31,9 @@ func TestRateLimiter_ConcurrentRequestsOnOneBucketDoNotRace(t *testing.T) {
 			defer wg.Done()
 			<-start
 			for i := 0; i < perWorker; i++ {
-				rl.Protect("root", ctx)
+				if _, _, _, err := rl.Protect("root", ctx); err != nil {
+					t.Errorf("rl.Protect: %v", err)
+				}
 			}
 		}()
 	}
@@ -57,14 +61,22 @@ func TestRateLimiter_EvictStaleKeepsATouchedBucketAndDropsAnUntouchedOne(t *test
 	rl := NewRateLimiterWithMaxAge(maxAge)
 	defer rl.Stop()
 	// Refills within the sleep below, so the idle bucket is back at capacity when swept.
-	rl.Register("op", &RateLimitConfig{Mode: ModeTokenBucket, Capacity: 2, RefillRate: 1000, Interval: time.Second, Dimensions: []string{"k"}})
+	if err := rl.Register("op", &RateLimitConfig{Mode: ModeTokenBucket, Capacity: 2, RefillRate: 1000, Interval: time.Second, Dimensions: []string{"k"}}); err != nil {
+		t.Fatalf("rl.Register: %v", err)
+	}
 	touched := ctxWith(map[string]string{"k": "touched"})
 	idle := ctxWith(map[string]string{"k": "idle"})
-	rl.Protect("op", touched)
-	rl.Protect("op", idle)
+	if _, _, _, err := rl.Protect("op", touched); err != nil {
+		t.Fatalf("rl.Protect: %v", err)
+	}
+	if _, _, _, err := rl.Protect("op", idle); err != nil {
+		t.Fatalf("rl.Protect: %v", err)
+	}
 
 	time.Sleep(maxAge + 50*time.Millisecond)
-	rl.Protect("op", touched) // refreshes the access time of an existing bucket
+	if _, _, _, err := rl.Protect("op", touched); err != nil {
+		t.Fatalf("rl.Protect: %v", err)
+	} // refreshes the access time of an existing bucket
 	rl.evictStale()
 
 	if got := rl.BucketCount(); got != 1 {

@@ -49,7 +49,9 @@ func TestAKeysLimitHoldsAcrossLimitersSharingAStore(t *testing.T) {
 		t.Fatal("a limit of 0 was enforced; it is unlimited")
 	}
 	for i := 0; i < 3; i++ {
-		bridge.Allow(context.Background(), "key_3", 2)
+		if _, _, _, err := bridge.Allow(context.Background(), "key_3", 2); err != nil {
+			t.Fatalf("bridge.Allow: %v", err)
+		}
 	}
 	if ok, _, _, _ := bridge.Allow(context.Background(), "key_3", 10); !ok {
 		t.Fatal("a raised limit kept the old bucket's refusal")
@@ -64,7 +66,9 @@ func TestTheLocalBucketRefusesBeforeTheStoreAndAStoreErrorRefuses(t *testing.T) 
 	l, _ := NewKeyLimiter(store, "s", time.Minute)
 	l.now = func() time.Time { return now }
 	for i := 0; i < 3; i++ {
-		l.Allow(context.Background(), "k", 2)
+		if _, _, _, err := l.Allow(context.Background(), "k", 2); err != nil {
+			t.Fatalf("l.Allow: %v", err)
+		}
 	}
 	start := now.Truncate(time.Minute)
 	if n, _ := store.Count(context.Background(), "s", "k", start); n != 2 {

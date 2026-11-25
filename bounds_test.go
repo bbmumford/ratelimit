@@ -11,7 +11,9 @@ import (
 func TestBoundedLimiter_KeyRotationStaysUnderTheCap(t *testing.T) {
 	rl := NewRateLimiterWithBounds(time.Hour, 100)
 	defer rl.Stop()
-	rl.Register("ip", &RateLimitConfig{Capacity: 2, RefillRate: 1, Interval: time.Hour, Dimensions: []string{"ip"}})
+	if err := rl.Register("ip", &RateLimitConfig{Capacity: 2, RefillRate: 1, Interval: time.Hour, Dimensions: []string{"ip"}}); err != nil {
+		t.Fatalf("rl.Register: %v", err)
+	}
 	for i := 0; i < 10_000; i++ {
 		ctx := &RateLimitContext{Dimensions: map[string]string{"ip": fmt.Sprintf("198.51.100.%d", i)}}
 		allowed, _, _, err := rl.Protect("ip", ctx)
@@ -33,14 +35,20 @@ func TestBoundedLimiter_RefilledBucketsGoFirst(t *testing.T) {
 	rl := NewRateLimiterWithBounds(time.Hour, 10)
 	defer rl.Stop()
 	// idle refills within the test's own runtime; busy refills one token an hour.
-	rl.Register("idle", &RateLimitConfig{Capacity: 1, RefillRate: 1_000_000, Interval: time.Millisecond, Dimensions: []string{"k"}})
-	rl.Register("busy", &RateLimitConfig{Capacity: 3, RefillRate: 1, Interval: time.Hour, Dimensions: []string{"k"}})
+	if err := rl.Register("idle", &RateLimitConfig{Capacity: 1, RefillRate: 1_000_000, Interval: time.Millisecond, Dimensions: []string{"k"}}); err != nil {
+		t.Fatalf("rl.Register: %v", err)
+	}
+	if err := rl.Register("busy", &RateLimitConfig{Capacity: 3, RefillRate: 1, Interval: time.Hour, Dimensions: []string{"k"}}); err != nil {
+		t.Fatalf("rl.Register: %v", err)
+	}
 	hot := &RateLimitContext{Dimensions: map[string]string{"k": "hot"}}
 	if allowed, _, _, _ := rl.Protect("busy", hot); !allowed {
 		t.Fatal("the busy key's first request must be allowed")
 	}
 	for i := 0; i < 50; i++ {
-		rl.Protect("idle", &RateLimitContext{Dimensions: map[string]string{"k": fmt.Sprintf("idle-%d", i)}})
+		if _, _, _, err := rl.Protect("idle", &RateLimitContext{Dimensions: map[string]string{"k": fmt.Sprintf("idle-%d", i)}}); err != nil {
+			t.Fatalf("rl.Protect: %v", err)
+		}
 		time.Sleep(time.Millisecond)
 	}
 	if _, remaining, _, _ := rl.Protect("busy", hot); remaining != 1 {
@@ -55,9 +63,13 @@ func TestBoundedLimiter_RefilledBucketsGoFirst(t *testing.T) {
 func TestBoundedLimiter_NonPositiveCapIsUncapped(t *testing.T) {
 	for _, maxKeys := range []int{0, -1} {
 		rl := NewRateLimiterWithBounds(time.Hour, maxKeys)
-		rl.Register("ip", &RateLimitConfig{Capacity: 1, RefillRate: 1, Interval: time.Hour, Dimensions: []string{"ip"}})
+		if err := rl.Register("ip", &RateLimitConfig{Capacity: 1, RefillRate: 1, Interval: time.Hour, Dimensions: []string{"ip"}}); err != nil {
+			t.Fatalf("rl.Register: %v", err)
+		}
 		for i := 0; i < 500; i++ {
-			rl.Protect("ip", &RateLimitContext{Dimensions: map[string]string{"ip": fmt.Sprint(i)}})
+			if _, _, _, err := rl.Protect("ip", &RateLimitContext{Dimensions: map[string]string{"ip": fmt.Sprint(i)}}); err != nil {
+				t.Fatalf("rl.Protect: %v", err)
+			}
 		}
 		if n := rl.BucketCount(); n != 500 {
 			t.Fatalf("maxKeys %d: the map holds %d buckets, want all 500", maxKeys, n)

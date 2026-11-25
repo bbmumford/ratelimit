@@ -11,7 +11,8 @@ import (
 func TestATokenBucketStartedAtTheCallersTimeRefillsOnThatClock(t *testing.T) {
 	start := time.Unix(1_000, 0)
 	tb := NewTokenBucketAt(2, 1, time.Second, start)
-	if !tb.AllowAt(start, 1) || !tb.AllowAt(start, 1) || tb.AllowAt(start, 1) {
+	first, second, third := tb.AllowAt(start, 1), tb.AllowAt(start, 1), tb.AllowAt(start, 1)
+	if !first || !second || third {
 		t.Fatal("a full bucket of two did not allow exactly two at its start")
 	}
 	if tb.AllowAt(start.Add(-time.Hour), 1) {

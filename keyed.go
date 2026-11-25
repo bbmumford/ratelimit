@@ -55,7 +55,10 @@ func (k *Keyed) Set(name string, rate, burst int, interval time.Duration) {
 	k.names[name] = true
 	rl := k.rl
 	k.mu.Unlock()
-	rl.Register(name, &RateLimitConfig{
+	// Register refuses only a nil limiter and a config whose interval is not
+	// positive; rl is never nil here and Set has already returned for such an
+	// interval, so its result is dropped.
+	_ = rl.Register(name, &RateLimitConfig{
 		Mode:       ModeTokenBucket,
 		Capacity:   burst,
 		RefillRate: rate,

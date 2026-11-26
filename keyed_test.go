@@ -7,18 +7,13 @@ import (
 	"time"
 )
 
-// A set limit refuses past its burst with a wait of at least a second, keeps
-// two keys and two limits apart, and an unset or non-positive limit admits
-// everything.
+// A set limit refuses past its burst with a wait of at least a second, and
+// keeps two keys and two limits apart.
 func TestKeyedLimitsEachKeyAndAnswersTheWait(t *testing.T) {
 	k := NewKeyed(time.Minute, 100)
 	defer k.Stop()
-	if ok, _ := k.Allow("source", "a"); !ok {
-		t.Fatal("a Keyed with no limit set refused")
-	}
 	k.Set("source", 1, 2, time.Second)
-	k.Set("token", 0, 5, time.Second)
-	k.Set("partition", 1, 1, 0)
+	k.Set("token", 1, 5, time.Second)
 	for i := 0; i < 2; i++ {
 		if ok, _ := k.Allow("source", "a"); !ok {
 			t.Fatalf("request %d within the burst refused", i+1)
@@ -31,13 +26,39 @@ func TestKeyedLimitsEachKeyAndAnswersTheWait(t *testing.T) {
 	if ok, _ := k.Allow("source", "b"); !ok {
 		t.Error("another key shared the first key's bucket")
 	}
-	for i := 0; i < 10; i++ {
-		if ok, _ := k.Allow("token", "a"); !ok {
-			t.Fatal("a limit set at rate 0 refused")
+	if ok, _ := k.Allow("token", "a"); !ok {
+		t.Error("another limit shared the source limit's bucket")
+	}
+}
+
+// Allow fails closed on everything the composition did not declare: a nil
+// Keyed, a name no Set or Unlimited declared, and a name Set with a rate or an
+// interval that is not positive all refuse, with a wait of at least a second.
+func TestKeyedRefusesWhatTheCompositionDidNotDeclare(t *testing.T) {
+	var nilKeyed *Keyed
+	if ok, wait := nilKeyed.Allow("source", "a"); ok || wait < time.Second {
+		t.Errorf("a nil Keyed = (%v, %v), want a refusal", ok, wait)
+	}
+	k := NewKeyed(time.Minute, 100)
+	defer k.Stop()
+	if ok, _ := k.Allow("source", "a"); ok {
+		t.Error("a Keyed with nothing declared admitted a request")
+	}
+	k.Set("source", 5, 5, time.Second)
+	if ok, _ := k.Allow("sorce", "a"); ok {
+		t.Error("a name never declared (a typo of a set one) admitted a request")
+	}
+	k.Set("token", 0, 5, time.Second)
+	k.Set("partition", 1, 1, 0)
+	k.Set("negative", -3, 1, time.Second)
+	for _, name := range []string{"token", "partition", "negative"} {
+		if ok, wait := k.Allow(name, "a"); ok || wait < time.Second {
+			t.Errorf("a limit %q set with a non-positive rate or interval = (%v, %v), want a refusal", name, ok, wait)
 		}
-		if ok, _ := k.Allow("partition", "a"); !ok {
-			t.Fatal("a limit set over a zero interval refused")
-		}
+	}
+	k.Unlimited("token")
+	if ok, _ := k.Allow("token", "a"); !ok {
+		t.Error("Unlimited after an invalid Set still refused")
 	}
 }
 

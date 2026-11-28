@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0](https://github.com/bbmumford/ratelimit/compare/v0.1.0...v0.2.0) (2026-11-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* a nil Keyed, a name no Set or Unlimited declared, and a name Set with a non-positive rate or interval now refuse every request. Declare an unbounded name with Unlimited.
+
+### Bug Fixes
+
+* Keyed refuses what the composition did not declare: a nil Keyed, an undeclared name and a limit set with a rate or interval that is not positive ([0206844](https://github.com/bbmumford/ratelimit/commit/020684419560cb6a2fa3897efc6bd523409d1a34))
+
 ## 0.1.0 (2026-11-25)
 
 
